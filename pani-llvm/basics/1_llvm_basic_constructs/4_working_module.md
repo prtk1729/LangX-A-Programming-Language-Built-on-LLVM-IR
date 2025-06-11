@@ -163,3 +163,57 @@ private:
       module->print(outLL, nullptr); // tries to wrirte into out.ll file and tracks the errors
   }   
 ```
+
+
+
+#### Ran the execuatble
+- Takes the program, as input
+- Inits the compiler
+- Generates the IR
+
+```cpp
+/* Executable 
+- Takes the program, as input
+- Inits the compiler
+- Generates the IR
+*/
+
+#include<string>
+#include "./src/AdaLLVM.h"
+
+int main(){ 
+
+    const std::string program = R"( 42 
+    )";
+
+    // init the compiler
+    AdaLLVM vm; 
+
+    // Execute
+    vm.exec(program);
+
+    return 0;
+}
+```
+
+
+> [!NOTE]
+> - We need to tell the compiler `paths` and `flags` to use, when compiling, sop that it knows
+> - to correctly compile the `LLVM` code.
+```bash
+clang++ -o ada-llvm $(llvm-config --cxxflags --ldflags --system-libs --libs core) ada-llvm.cpp
+```
+
+![](../images/running_exec.png)
+- This generates the `.ll` and `out/binary file`
+- Running this `compiles` AdaLLVM.h correctly as the print stmts:-
+  - Inside `exec()`
+  - Inside `saveModuleToFile()` 
+  - Both, printed in the `terminal` and `.ll` file
+  - Recall: `module->print( ostream address, AssemblyAnnotator address )`
+  - `module->print( llvm::outs(), nullptr );`
+  - Also, `llvm's raw_fd_ostream` i.e 
+    - ClassName: llvm::raw_fd_ostream
+    - ObjectName: outLL
+    - Params: outLL( filename, errorCode )
+    - `std::eeror_code` is used to `store` errors when `opening/writing` unto `files`
