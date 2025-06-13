@@ -1,3 +1,6 @@
+### Objective
+- Compile the `main` function
+
 #### Let's optimise the build-system (`Not exactly build-sys`)
 
 ```bash

@@ -9,7 +9,7 @@
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Verifier.h"
 
-
+#include<iostream>
 
 
 class AdaLLVM {
@@ -116,27 +116,47 @@ private:
             }
          */
 
-        // Imagine for now, 42 is main's body
-         llvm::Value* result = gen( /* ast */ ); // emits the IR and CodeGen part of pipeline
+        // ################################################################
+        // // // Imagine for now, 42 is main's body
+        //  llvm::Value* result = gen( /* ast */ ); // emits the IR and CodeGen part of pipeline
 
-         // create the caster to cat "42" into i32 rewcall: ret i32 42
-        /*   Value *CreateIntCast(Value *V, Type *DestTy, bool isSigned,
-            const Twine &Name = "") */
-         auto i32Result = builder->CreateIntCast( result, /*  Value* */
-                                                  builder->getInt32Ty(), /* DestTy */
-                                                  true /* isIsgned? */ 
-                                                    );
+        //  // create the caster to cat "42" into i32 rewcall: ret i32 42
+        // /*   Value *CreateIntCast(Value *V, Type *DestTy, bool isSigned,
+        //     const Twine &Name = "") */
+        //  auto i32Result = builder->CreateIntCast( result, /*  Value* */
+        //                                           builder->getInt32Ty(), /* DestTy */
+        //                                           true /* isIsgned? */ 
+        //                                             );
                                                 
-        // ret instruction
-        // ret i32 42
-        i32Result = builder->CreateRet(i32Result);
+        // // ret instruction
+        // // ret i32 42
+        // i32Result = builder->CreateRet(i32Result);
+        // ################################################################
+
+        // ############ printf checking #############
+        gen(); // no result required like 42, as we don't want to typecast
+        // Just like cpp, llvm also treats string as a sequence of chars
+        // each char is i8 i.e 8 bits or 1 byte
+        // align 1 => recall: byte-aligned
+        builder->CreateRet( builder->getInt32(0) );
+        // ############ printf checking #############
+
+        
     }
 
     llvm::Value* gen( /*ast*/ ){
         // ast just has "42" which is the main-fn body [simple body for now]
         // Which we will cast in i32 anmd then createt he Ret
         // For now, just create this llvm::Value called "42"
-        return builder->getInt32(42);
+        // return builder->getInt32(42);
+
+
+        /* Implelemt printf as function body ; printf is an operator 
+        But, under the hood it is implemented as a ExternalFUnction */
+        // printf "Hello, World!"
+        // CReateGlobalStringPtr returns a ptr of "i8 *" type
+        // Basically, this creates the main-body NOT having "42" rather "Hello, WOrld!"
+        return builder->CreateGlobalStringPtr("Hello, World!"); // ret Value* cvan accept this ptr
     }
 
     /* Checks if function is already present asdking the builder, if not creates the fn-prototype */
