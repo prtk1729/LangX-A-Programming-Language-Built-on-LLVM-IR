@@ -1,0 +1,150 @@
+/*
+3 Sections:-
+1. Lexical Grammar
+2. C++ datastructures for bnf rules
+3. BNF Rules
+*/
+
+// ----------------------------------------------
+/* LEXICAL GRAMMAR (TOKENS) */
+
+%lex
+
+%%
+
+\/\/.*             %empty
+\/\*[\s\S]*?\*\/   %empty
+
+\s+                %empty
+
+\"[^\"]*\"         STRING
+
+\d+                NUMBER
+
+[\w\-+*=!<>/]+     SYMBOL
+
+/lex
+
+
+// ----------------------------------------------
+
+
+// ----------------------------------------------
+/* BNF GRAMMAR */
+
+%{
+#include<string>
+#include<vector>
+
+/* Helper Datastructures in cpp */
+enum class ExpType{
+    NUMBER,
+    STRING,
+    SYMBOL,
+    LIST,
+};
+
+struct Exp{
+    ExpType type;          // strore the Type
+    std::string string;         // If string store the actual string
+    int number;            // If number
+    std::vector<Exp> list; // If list
+
+    // If number
+    Exp(int num){
+        type = ExpType::NUMBER;
+        number = num;
+    }
+
+    // If string or symbol
+    Exp(const std::string& strVal){
+        // if string
+        if( strVal[0] == '"' ){                         // first char is sttart-quote
+            type = ExpType::STRING;
+            string = strVal.substr(1, strVal.size()-2); // end-quote + \n
+        }
+        else{
+            type = ExpType::SYMBOL;
+            string = strVal;
+        }
+    }
+
+    // If list
+    Exp(std::vector<Exp> lst){ // have added from main() code
+        type = ExpType::LIST;
+        list = lst;
+    }
+};
+
+// alias
+using Value = Exp; // We will use syntax-cli that parses and creates the ast which expects final type to be Value-type
+%}
+
+/* BNF Rules using the above cpp datastructures */
+/* <non-terminal>
+ : <option 1>
+ | <option 2>
+ | <option 3> ...
+ ;                              // end of rule 
+*/
+
+%%
+Exp
+    : Atom
+    | List
+    ;
+
+Atom
+    : NUMBER        { $$ = Exp(std::stoi($1)); }  
+    | SYMBOL        { $$ = Exp($1); }
+    | STRING        { $$ = Exp($1); }
+    ;
+
+List
+    : '(' ListEntries ')'    { $$ = $2; }
+    ;
+
+ListEntries
+    : %empty            { $$ = Exp(std::vector<Exp>{}); }
+    | ListEntries Exp   { $1.list.push_back($2); $$ = $1; }
+    ;
+
+
+
+
+/*
+// inp as program string: (add 1 2) -> Fed to Parser
+int main(){
+    Exp e1 = Exp("add"); // Lex o/p is: SYMBOL(add)
+    Exp e2 = Exp(1); // Lex o/p is: NUMBER(1)
+    Exp e3 = Exp(2); // Lex o/p is: NUMBER(2)
+
+    std::vector<Exp> lst = {e1, e2, e3};
+    Exp lstExp = Exp(lst);
+    Exp finalExp = Exp(lstExp);
+
+    return 0;
+}
+*/
+
+
+/*
+%lex
+// <regex> {Action/C++}
+
+
+%%
+
+\/\/.*              %empty    // single line comment => skip; .* is anything that's after this uptil newline
+\/\*[\s\S]*?\*\/    %empty
+
+\s+                 %empty    // skip <space, tabs> skip these tokens
+\d+                 NUMBER
+
+\"[^\"]*\"          STRING    // Starts and ends with quotes and within that <anything but ">, ^ is (negation)
+[\w--+*=!<>/]+      SYMBOL    // hello, add, += , >=, != \w+ are any digits, number and underscore 
+
+/lex
+*/
+// ----------------------------------------------
+

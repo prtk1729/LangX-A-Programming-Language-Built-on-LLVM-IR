@@ -11,23 +11,32 @@
 
 #include<iostream>
 
+#include "./parser/AdaParser.h"
+using syntax::AdaParser; // class AdaParser is encapsulated inside synatx namespace in Adaparser.h
+
 
 class AdaLLVM {
 public:
-    AdaLLVM() { moduleInit(); } // constructor inits the modules
+    // AdaLLVM() : parser = std::make_unique<AdaParser>() // b4 executing the consr body, we initialise unique_ptrs and const values in this init-list
+    AdaLLVM() : parser(std::make_unique<AdaParser>()){ // init-list syntax: member(value) 
+        moduleInit(); 
+        setupExternFunctions();
+    } // constructor inits the modules and `extern` functions
 
     void exec(const std::string& program){
         // takes this program as a const string
 
         // 1. Parses the code -> Generates the Abstract Syntax Tree
-        // auto ast = parser->parse(program); // Can imagine this for now
+        auto ast = parser->parse(program); // We can uncomment this, given that we have the ptr to AdaParser obj
+        // returns Exp* type
 
-        // 2. Generates the AST
+        // 2. Generates the AST nodes
         /* Imagine we have the ast, currently; Using the compiler
            Walk over the tree and generate the IR, pertaining to each method
            Can imagine .add, etc
         */ 
-        compile(/* ast */); // emits the AST into IR using IRBuilder
+        // compile(/* ast */); // emits the AST into IR using IRBuilder
+        compile(ast); // Emits the IR using the IRBuilder for the given ast
 
         // While executation let's print the output into the llvm outstream
         module->print( llvm::outs(), nullptr ); // raw_fd_ostream is outs(), AssemblyAnnotatorWriter is nullptr
@@ -57,6 +66,8 @@ private:
      */
     std::unique_ptr< llvm::IRBuilder<> > builder;
 
+    /* Pointer to obj of AdaParser class */
+    std::unique_ptr<AdaParser> parser; // AdaParser class inside AdaLLVM.h
 
     /* Poiunter pointing to Current Compiling Functio */
     llvm::Function* fn;
@@ -97,8 +108,8 @@ private:
         We can start updating from compile(ast)
     */
 
-    void compile(/* TODO: ast */){
-
+    // void compile(/* TODO: ast */){
+    void compile( const Exp& ast ){
         // 1. Create the function main function [can be thoufght of as a block]
         /* define i32 @main  -> includes fnName, retType, argType, varargs*/
         // To create a fn, we need fnName and fnType describing the function
@@ -134,29 +145,91 @@ private:
         // ################################################################
 
         // ############ printf checking #############
-        gen(); // no result required like 42, as we don't want to typecast
+        gen( ast ); // no result required like 42, as we don't want to typecast
         // Just like cpp, llvm also treats string as a sequence of chars
         // each char is i8 i.e 8 bits or 1 byte
         // align 1 => recall: byte-aligned
         builder->CreateRet( builder->getInt32(0) );
         // ############ printf checking #############
-
-        
     }
 
-    llvm::Value* gen( /*ast*/ ){
-        // ast just has "42" which is the main-fn body [simple body for now]
-        // Which we will cast in i32 anmd then createt he Ret
-        // For now, just create this llvm::Value called "42"
-        // return builder->getInt32(42);
+    llvm::Value* gen( const Exp& ast ){
+
+        // handle root node of ast based on types and do this recursively
+        switch(ast.type){
+            /** 
+             * simple numbers like 42
+            */
+            case ExpType::NUMBER:
+                return builder->getInt32(ast.number);
+
+            /**
+             * String -> create global string as before
+             */
+            case ExpType::STRING:
+                return builder->CreateGlobalStringPtr(ast.string);
+
+            /**
+             * Symbol
+             */
+            case ExpType::SYMBOL:
+                return builder->getInt32(0); // we will handle this later
+
+            /**
+             * List: Example (printf "Value: %d" 42 )
+             */
+            case ExpType::LIST:
+                // imagine (printf "Value: %d" 42) -> [ Exp(printf) Exp("Value: %d")  Exp(42) ]
+                auto tag = ast.list[0]; // Imagine [ Exp(printf), type=ExpType::SYMBOL, string = "printf" ]
+
+                // If tag is a symbol to handle printf (say) or any function structure
+                if(tag.type == ExpType::SYMBOL){
+                    // get the string i.e fnName
+                    auto fnName = tag.string;
+
+                    if( fnName == "printf" ){ // also called op == "printf"
+                        // CreateCall logic
+
+                        auto printfFn = module->getFunction(fnName);
+                        // create args
+                        std::vector<llvm::Value*> args{};
+                        for(auto i=1; i<ast.list.size(); i++){
+                            // iterate over [ Exp(printf) Exp("Value: %d")  Exp(42) ]
+                            llvm::Value* val = gen(ast.list[i]); // recursive based on ExpType 
+                            args.push_back(val);
+                        }
+
+                        // can CreateCall
+                        builder->CreateCall(printfFn, args);
+                    }
+                }
+        }    
+        // Unreachable:
+        return builder->getInt32(0); // temporarily return 0, if Unreachable
+    }
 
 
-        /* Implelemt printf as function body ; printf is an operator 
-        But, under the hood it is implemented as a ExternalFUnction */
-        // printf "Hello, World!"
-        // CReateGlobalStringPtr returns a ptr of "i8 *" type
-        // Basically, this creates the main-body NOT having "42" rather "Hello, WOrld!"
-        return builder->CreateGlobalStringPtr("Hello, World!"); // ret Value* cvan accept this ptr
+    void setupExternFunctions(){
+        /* Idea is: Creating prototype by adding to module; Just declaration NOT definition */
+        /* These Extern Functions are telling the compiler, "don't worry, I am not
+        defining the function here, rather just declaring"
+        These are defined somewhere else (maybe in a diff file)
+        Sc: When declaring the prototype `extern <functionSignature>` */
+
+        // Just Insert in the module, this new func
+
+        // int print( const char* format, ...) => Prototype of printf
+        auto int8ptr = builder->getInt8Ty()->getPointerTo();
+        llvm::FunctionType* printfType = llvm::FunctionType::get(
+                                                                    /* ret type */ builder->getInt32Ty(),
+                                                                    /* 1st arg type */ int8ptr,
+                                                                    /* is varargs? */ true
+                                                                );
+
+        
+        // add to module: Checks if already DNE, adds to module, later
+        // fetch by: module->getFunction()
+        module->getOrInsertFunction( "printf", printfType);
     }
 
     /* Checks if function is already present asdking the builder, if not creates the fn-prototype */

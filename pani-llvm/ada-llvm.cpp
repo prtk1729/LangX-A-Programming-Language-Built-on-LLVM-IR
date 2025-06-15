@@ -9,8 +9,11 @@
 
 int main(){ 
 
-    const std::string program = R"( 42 
-    )";
+    std::string program = R"( 
+
+            (printf "Value: %d" 42)
+
+        )";
 
     // init the compiler
     AdaLLVM vm; 
