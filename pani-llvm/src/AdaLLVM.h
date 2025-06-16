@@ -173,8 +173,17 @@ private:
              * Symbol
              */
             case ExpType::SYMBOL:
-                return builder->getInt32(0); // we will handle this later
-
+                /**
+                 * Boolean
+                 * R "(
+                 *      (printf "Value: %d\n\n" true) 
+                 *  )"
+                 */
+                if( (ast.string == "true") or (ast.string == "false") ){
+                    auto value = ((ast.string == "true") ? true : false);
+                    return builder->getInt1(value);
+                }
+                
             /**
              * List: Example (printf "Value: %d" 42 )
              */
@@ -182,15 +191,34 @@ private:
                 // imagine (printf "Value: %d" 42) -> [ Exp(printf) Exp("Value: %d")  Exp(42) ]
                 auto tag = ast.list[0]; // Imagine [ Exp(printf), type=ExpType::SYMBOL, string = "printf" ]
 
-                // If tag is a symbol to handle printf (say) or any function structure
+                // If tag is a symbol to handle printf (say) or any function structure or global/local var
                 if(tag.type == ExpType::SYMBOL){
-                    // get the string i.e fnName
-                    auto fnName = tag.string;
+                    // get the string i.e fnName or "var"
+                    auto op = tag.string;
 
-                    if( fnName == "printf" ){ // also called op == "printf"
+                    if( op == "var" ){
+                        /**
+                         * Variables
+                         * 1. Local (TODO)
+                         * 2. Global
+                         *      - R" ( (var VERSION 42) ) " 
+                         *      - var: tag
+                         *      - VERSION: name of global var i.e varName
+                         *      - 42:  init_value
+                         */
+                        std::string varName = ast.list[1].string; // Trap: ast.list[1] will have Exp("VERSION"), we need to get the string
+                        // Initialiser
+                        llvm::Value* init_value = gen(ast.list[2]); // ast.list[2] has Exp(42), which is expected for gen
+                        // sets properties and of this global variable, just like createFunction
+                        llvm::GlobalVariable* g = createGlobalVariable(varName, 
+                                                                        (llvm::Constant*)init_value);
+                        return g;
+                    }
+
+                    else if( op == "printf" ){ // also called op == "printf"
                         // CreateCall logic
-
-                        auto printfFn = module->getFunction(fnName);
+                        
+                        auto printfFn = module->getFunction(op);
                         // create args
                         std::vector<llvm::Value*> args{};
                         for(auto i=1; i<ast.list.size(); i++){
@@ -230,6 +258,19 @@ private:
         // add to module: Checks if already DNE, adds to module, later
         // fetch by: module->getFunction()
         module->getOrInsertFunction( "printf", printfType);
+    }
+
+    llvm::GlobalVariable* createGlobalVariable( const std::string& varName, 
+                                                llvm::Constant* init_value) {
+        // using the module setOrInsert
+        module->getOrInsertGlobal(varName, init_value->getType() );
+        // fetch once registered
+        llvm::GlobalVariable* varFn = module->getNamedGlobal(varName); 
+        // set some properties of global: isItConstant, setInitializer, setAlignment
+        varFn->setAlignment(llvm::MaybeAlign(4)); // Make thgis variable 4B aligned as int
+        varFn->setConstant(false); // multable i.e can be changed
+        varFn->setInitializer(init_value);
+        return varFn;
     }
 
     /* Checks if function is already present asdking the builder, if not creates the fn-prototype */

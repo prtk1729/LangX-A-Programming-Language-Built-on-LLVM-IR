@@ -11,7 +11,7 @@ int main(){
 
     std::string program = R"( 
 
-            (printf "Value: %d" 42)
+        (var VERSION 42)
 
         )";
 
