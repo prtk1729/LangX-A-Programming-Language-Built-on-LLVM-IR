@@ -144,6 +144,15 @@ private:
         // i32Result = builder->CreateRet(i32Result);
         // ################################################################
 
+        // ################################################################
+        // INIT GLOBAL
+        std::string varName = "VERSION";
+        llvm::Constant* init_value = builder->getInt32(42);
+        createGlobalVariable(varName, init_value); // creates @VERSION = global i32 42, align 4
+
+        // ################################################################
+
+
         // ############ printf checking #############
         gen( ast ); // no result required like 42, as we don't want to typecast
         // Just like cpp, llvm also treats string as a sequence of chars
@@ -183,7 +192,18 @@ private:
                     auto value = ((ast.string == "true") ? true : false);
                     return builder->getInt1(value);
                 }
-                
+                else{
+                    /**
+                     * Global Vars
+                     */
+                    // (var VERSION 42)
+                    // assume we have created the global var named VERSION
+                    // stored inside module
+                    // ast.string will contain the name
+                    auto varName = ast.string;
+                    // module->getNamedGlobal(varName); // returns the llvm::GlobalVariable*
+                    return module->getNamedGlobal(varName)->getInitializer(); // gets actual value
+                }
             /**
              * List: Example (printf "Value: %d" 42 )
              */
@@ -212,7 +232,7 @@ private:
                         // sets properties and of this global variable, just like createFunction
                         llvm::GlobalVariable* g = createGlobalVariable(varName, 
                                                                         (llvm::Constant*)init_value);
-                        return g;
+                        return g->getInitializer();
                     }
 
                     else if( op == "printf" ){ // also called op == "printf"
