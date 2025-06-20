@@ -22,26 +22,28 @@ int main(){
 
     // Below will fail becoz, of multiple top-level S-expression
     // Soln: Make single top-level s-expression 
+    std::string program = R"(
+        (begin
+            (var x 12)
+
+            (begin 
+                (var x 42)
+                (printf "Version: %d    " x)
+            )
+
+            (set x 100)
+            (printf "Version: %d    " x)
+        )
+    )";
+
+
     // std::string program = R"(
 
-    //     (var VERSION 42)
-
-    //     (begin 
-    //         (var VERSION 42)
-    //         (printf "Version: %d\n\n" VERSION)
-    //     )
-
+    // (begin
     //     (printf "Version: %d\n\n" VERSION)
+    // )
+
     // )";
-
-
-    std::string program = R"(
-
-    (begin
-        (printf "Version: %d\n\n" VERSION)
-    )
-
-    )";
 
     // init the compiler
     AdaLLVM vm; 

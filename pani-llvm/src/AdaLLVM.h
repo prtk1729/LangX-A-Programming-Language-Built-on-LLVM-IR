@@ -68,6 +68,11 @@ private:
     /* It creates the LLVM instructions and puts them into the BasicBlock
      */
     std::unique_ptr< llvm::IRBuilder<> > builder;
+    /**
+     * varsBuilder
+     * To insert local vars at the beginning of an entryBlock of a function
+     */
+    std::unique_ptr< llvm::IRBuilder<> > varsBuilder;
 
     /* Pointer to obj of AdaParser class */
     std::unique_ptr<AdaParser> parser; // AdaParser class inside AdaLLVM.h
@@ -106,6 +111,8 @@ private:
         // 3. Using ctx ptr create the builder
         // IRBuilder<>::IRBuilder(LLVMContext&) hence send a ptr
         builder = std::make_unique<llvm::IRBuilder<>>(*ctx);
+
+        varsBuilder = std::make_unique<llvm::IRBuilder<>> (*ctx);
     }
 
     /* Think in terms of creating a function -> 
@@ -210,9 +217,13 @@ private:
                     auto varName = ast.string;
                     auto value = env->lookup(varName);
 
+                    /* Using the following logic, we can know if this symbol is a GlobalVar or AllocaInst i.e local */
                     // once we get the value, we ask if this is of type GlobalVariable
                     auto globalVar = llvm::dyn_cast<llvm::GlobalVariable>(value); // if value is of type GlobaVariable* get the add, else nullptr
-                    if( globalVar ){
+                    // SImilarly, if localVar is of type AllocaInstr -> local
+                    auto localVar = llvm::dyn_cast<llvm::AllocaInst> (value); // nullptr if not stack-var
+                    
+                    if( globalVar ){ // 1. if global
                         // not nullptr
                         // Emit LLVM's Load Instr
                         return builder->CreateLoad(
@@ -221,9 +232,13 @@ private:
                                             varName.c_str() /* Twine& Name = "" */
                                         );
                     }
-                    
+
+                    else{ // 2. if local
+                        return builder->CreateLoad( localVar->getAllocatedType(), /* llvm::AllocaInst* */ 
+                                                localVar, 
+                                                varName.c_str() );
+                    }
                     // // module->getNamedGlobal(varName); // returns the llvm::GlobalVariable*
-                    // return module->getNamedGlobal(varName)->getInitializer(); // gets actual value
                 }
             /**
              * List: Example (printf "Value: %d" 42 )
@@ -237,30 +252,93 @@ private:
                     // get the string i.e fnName or "var"
                     auto op = tag.string;
 
+                    // if( op == "var" ){
+                    //     /**
+                    //      * Variables
+                    //      * 1. Local (TODO)
+                    //      * 2. Global
+                    //      *      - R" ( (var VERSION 42) ) " 
+                    //      *      - var: tag
+                    //      *      - VERSION: name of global var i.e varName
+                    //      *      - 42:  init_value
+                    //      */
+                    //     std::string varName = ast.list[1].string; // Trap: ast.list[1] will have Exp("VERSION"), we need to get the string
+                    //     // Initialiser
+                    //     llvm::Value* init_value = gen(ast.list[2], env); // ast.list[2] has Exp(42), which is expected for gen
+                    //     // sets properties and of this global variable, just like createFunction
+                    //     llvm::GlobalVariable* g = createGlobalVariable(varName, 
+                    //                                                     (llvm::Constant*)init_value);
+                    //     return g->getInitializer();
+                    // }
+
                     if( op == "var" ){
                         /**
-                         * Variables
-                         * 1. Local (TODO)
-                         * 2. Global
-                         *      - R" ( (var VERSION 42) ) " 
-                         *      - var: tag
-                         *      - VERSION: name of global var i.e varName
-                         *      - 42:  init_value
+                         * var declarartion in s-expression
+                         * - (var x 42) 
+                         * - (var (x number) 42 )
+                         * - (var (x string) "Hello" )
+                         * - Difference between global and local vars
+                         *  - Can be know from the init_value's type i.e is it:-
+                         *      - llvm::dyn< llvm::GlobalVariable > (value) OR
+                         *      - llvm::dyn< llvm::AllocInst > (value)
+                         *          - Every local var is stored in stack memory
+                         *          - The ptr to it is saved and accessed using load and store of this ptr
+                         *          - Hence, one way to distinguih is asking if it is AllocInst type?
                          */
-                        std::string varName = ast.list[1].string; // Trap: ast.list[1] will have Exp("VERSION"), we need to get the string
-                        // Initialiser
-                        llvm::Value* init_value = gen(ast.list[2], env); // ast.list[2] has Exp(42), which is expected for gen
-                        // sets properties and of this global variable, just like createFunction
-                        llvm::GlobalVariable* g = createGlobalVariable(varName, 
-                                                                        (llvm::Constant*)init_value);
-                        return g->getInitializer();
+
+                        auto varNameDecl = ast.list[1]; // (var x 42) or (var (x number) 42) -> x or (x number)
+                        auto varName = extractVarName(varNameDecl); // varName = x
+
+                        // we need to extract the type to create the alloca instr
+                        auto varType = extractVarType(varNameDecl); // llvm::Type* 
+
+                        // Now, we have both the name and type, we can create teh bindings
+                        /**
+                         * First we need to insert this local var at the entryBlock of the fn it belongs to 
+                         * We have a general builder that emits usual load, store, call instr
+                         *  - The primary builder follows the control flow
+                         * - But, the local vars, should be inserted as first instr at the entryBlock. Why?
+                         *     - So, that compiler knows beforehand, how much mem to allocate in stack space for these
+                         *     - Hence, the need for another builder -> varsBuilder
+                         *  - We also, need to attach this local var to its env
+                         */     
+                        llvm::Value* varBinding = allocVars(varName, varType, env); // binds
+
+                        // Set value
+                        auto init_value = gen(ast.list[2], env);
+
+                        /* store ir syntax:  store <type> <value>, <type> * <ptrName> */
+                        // emits IR: store i32 42, i32* %x; Here %x is varBinding of alloca which is ptr
+                        // store i32 42, i32* %x; write value "42" to the mem locn pointed by pointer %x
+                        return builder->CreateStore( init_value, varBinding );
+                    }
+
+                    else if(op == "set"){
+                        /* (set x 100) */
+                        auto varName = ast.list[1].string;
+
+                        // value: Needed to create Store Inst
+                        auto value = gen(ast.list[2], env);
+
+                        // Need Value* of this name
+                        auto varBinding = env->lookup(varName); // returns llvm::Value* searches recursively record_[varName]
+
+                        // emits IR instruction
+                        // store i32 100, i32* %x, align 4
+                        builder->CreateStore(value, varBinding);
                     }
 
                     else if(op == "begin"){
+                        /* Here, we have to make a new Env due to this begin scope */
+                        std::map<std::string, llvm::Value*> record;
+                        std::shared_ptr<Environment> beginEnv = std::make_shared<Environment>(
+                                                                                            record, 
+                                                                                            env);
+
                         // (begin <expression>)
                         llvm::Value* retBlock; // parse each block and return the last block
                         for(int i=1; i<ast.list.size(); i++){
-                            retBlock = gen(ast.list[i], env); //last update will be retBlock
+                            retBlock = gen(ast.list[i], beginEnv); //last update will be retBlock
                         }
 
                         return retBlock;
@@ -287,6 +365,74 @@ private:
         return builder->getInt32(0); // temporarily return 0, if Unreachable
     }
 
+    /**
+     * extractVarName 
+     * (var x 42) -> extracts x
+     * (var (x number) 42 ) -> extracts x
+     */
+    std::string extractVarName(Exp& exp){
+        // exp can be of type LIST or ow -> if list then [0]
+        if( exp.type == ExpType::LIST ){
+            return exp.list[0].string; // Exp( [Exp(x) Exp(number)] )
+        }
+
+        // ow usual
+        return exp.string; // Exp(x)
+    }
+
+    /**
+     * (var (x number) 42) -> type is number -> i32
+     * (var (x string) "Hello") -> type is string -> i8*
+     * (var x 42) -> default i32
+     */
+    llvm::Type* extractVarType(Exp& exp){
+        if( exp.type == ExpType::LIST ){
+            return getStringType(exp.list[1].string);
+        }
+        return builder->getInt32Ty();
+    }
+
+    /**
+     * "number" -> i32
+     * "string" -> i8*
+     * default: i32
+     */
+    llvm::Type* getStringType(const std::string& name_){
+        if (name_ == "number")
+            return builder->getInt32Ty();
+
+        else if(name_ == "string"){
+            // "string" which is char* 
+            return builder->getInt8Ty()->getPointerTo();
+        }
+        // default
+        return builder->getInt32Ty();
+    }
+
+    llvm::Value* allocVars(const std::string& varName, 
+                            llvm::Type* varType, 
+                            std::shared_ptr<Environment> env){
+        
+        // varsBuilder to use so that this alloca instr is created at EntryBlock
+        varsBuilder->SetInsertPoint(&fn->getEntryBlock()); // points to start of the entryBlock of cur function
+
+                            
+        // %x = alloca i32; if 0
+        // %x = alloca i32, i32 5; if 5 i.e 5 cts blocks allocated in stack each of type i32
+        // setInsert... by varsBuilder makes it point to entry block then the following code is emiited there
+        /*
+        entry:
+            %x = alloca i32
+        */
+        auto varPtr = varsBuilder->CreateAlloca(varType, /* llvm::Type* */
+                                    0,     /* single scalar value, had it been arr of 5, here 5 */
+                                    varName); // pointing here, it creates this alloca instr here
+        // This builder emits code: %x = alloca i32; 
+
+        // bind with thi env
+        env->define(varName, varPtr); // varPtr is expected as above returns i32* i.e llvm::Value*
+        return varPtr;
+    }
 
     void setupExternFunctions(){
         /* Idea is: Creating prototype by adding to module; Just declaration NOT definition */
