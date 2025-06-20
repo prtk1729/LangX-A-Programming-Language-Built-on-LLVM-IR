@@ -12,6 +12,8 @@
 #include<iostream>
 
 #include "./parser/AdaParser.h"
+#include "Environment.h"
+
 using syntax::AdaParser; // class AdaParser is encapsulated inside synatx namespace in Adaparser.h
 
 
@@ -21,13 +23,14 @@ public:
     AdaLLVM() : parser(std::make_unique<AdaParser>()){ // init-list syntax: member(value) 
         moduleInit(); 
         setupExternFunctions();
+        setupGlobalVariables();
     } // constructor inits the modules and `extern` functions
 
     void exec(const std::string& program){
         // takes this program as a const string
 
         // 1. Parses the code -> Generates the Abstract Syntax Tree
-        auto ast = parser->parse(program); // We can uncomment this, given that we have the ptr to AdaParser obj
+        auto ast = parser->parse(program);
         // returns Exp* type
 
         // 2. Generates the AST nodes
@@ -72,6 +75,9 @@ private:
     /* Poiunter pointing to Current Compiling Functio */
     llvm::Function* fn;
 
+    /* Shared Ptr to this root-Env */
+    std::shared_ptr<Environment> GlobalEnv;
+
 
 private:
     void saveModuleToFile(const std::string& filename){
@@ -115,7 +121,8 @@ private:
         // To create a fn, we need fnName and fnType describing the function
         fn = createFunction("main", 
                             llvm::FunctionType::get( /* llvm::Type* */ builder->getInt32Ty(),
-                                                    /* isVarArg required? */ false )
+                                                    /* isVarArg required? */ false ),
+                            GlobalEnv     // add this "main" which is a fnName i.e SYMBOL inside this global-env
                         ); 
 
         // 2. Create the function body -> DOne by CodeGen Part of the Viz
@@ -154,7 +161,7 @@ private:
 
 
         // ############ printf checking #############
-        gen( ast ); // no result required like 42, as we don't want to typecast
+        gen( ast, GlobalEnv ); // no result required like 42, as we don't want to typecast
         // Just like cpp, llvm also treats string as a sequence of chars
         // each char is i8 i.e 8 bits or 1 byte
         // align 1 => recall: byte-aligned
@@ -162,7 +169,7 @@ private:
         // ############ printf checking #############
     }
 
-    llvm::Value* gen( const Exp& ast ){
+    llvm::Value* gen( const Exp& ast, std::shared_ptr<Environment> env ){
 
         // handle root node of ast based on types and do this recursively
         switch(ast.type){
@@ -201,8 +208,22 @@ private:
                     // stored inside module
                     // ast.string will contain the name
                     auto varName = ast.string;
-                    // module->getNamedGlobal(varName); // returns the llvm::GlobalVariable*
-                    return module->getNamedGlobal(varName)->getInitializer(); // gets actual value
+                    auto value = env->lookup(varName);
+
+                    // once we get the value, we ask if this is of type GlobalVariable
+                    auto globalVar = llvm::dyn_cast<llvm::GlobalVariable>(value); // if value is of type GlobaVariable* get the add, else nullptr
+                    if( globalVar ){
+                        // not nullptr
+                        // Emit LLVM's Load Instr
+                        return builder->CreateLoad(
+                                            globalVar->getInitializer()->getType(), /* expects type */
+                                            globalVar, /* expects llvm::Value* */
+                                            varName.c_str() /* Twine& Name = "" */
+                                        );
+                    }
+                    
+                    // // module->getNamedGlobal(varName); // returns the llvm::GlobalVariable*
+                    // return module->getNamedGlobal(varName)->getInitializer(); // gets actual value
                 }
             /**
              * List: Example (printf "Value: %d" 42 )
@@ -228,11 +249,21 @@ private:
                          */
                         std::string varName = ast.list[1].string; // Trap: ast.list[1] will have Exp("VERSION"), we need to get the string
                         // Initialiser
-                        llvm::Value* init_value = gen(ast.list[2]); // ast.list[2] has Exp(42), which is expected for gen
+                        llvm::Value* init_value = gen(ast.list[2], env); // ast.list[2] has Exp(42), which is expected for gen
                         // sets properties and of this global variable, just like createFunction
                         llvm::GlobalVariable* g = createGlobalVariable(varName, 
                                                                         (llvm::Constant*)init_value);
                         return g->getInitializer();
+                    }
+
+                    else if(op == "begin"){
+                        // (begin <expression>)
+                        llvm::Value* retBlock; // parse each block and return the last block
+                        for(int i=1; i<ast.list.size(); i++){
+                            retBlock = gen(ast.list[i], env); //last update will be retBlock
+                        }
+
+                        return retBlock;
                     }
 
                     else if( op == "printf" ){ // also called op == "printf"
@@ -243,7 +274,7 @@ private:
                         std::vector<llvm::Value*> args{};
                         for(auto i=1; i<ast.list.size(); i++){
                             // iterate over [ Exp(printf) Exp("Value: %d")  Exp(42) ]
-                            llvm::Value* val = gen(ast.list[i]); // recursive based on ExpType 
+                            llvm::Value* val = gen(ast.list[i], env); // recursive based on ExpType 
                             args.push_back(val);
                         }
 
@@ -280,6 +311,30 @@ private:
         module->getOrInsertFunction( "printf", printfType);
     }
 
+    /**
+     * sets up all the global vars
+     */
+    void setupGlobalVariables(){
+        // first lets create a dummy variable
+        std::map<std::string, llvm::Value*> globalObj;
+        globalObj["VERSION"] = builder->getInt32(42);
+
+        // We create a globalRecord and add all these variables
+        // finally using this record create a class and wrap inside a share_ptr which will be 
+        // globalPtr and add all the SYMBOLS to module by calling createGlobalVar
+
+        std::map<std::string, llvm::Value*> globalRecord;
+        for(auto &p: globalObj){    
+            globalRecord[p.first] = createGlobalVariable( p.first, // varName
+                                            (llvm::Constant*)p.second // init_value
+                                     );
+        }
+        // finally setup this global-shared-ptr of this root-Env
+        GlobalEnv = std::make_shared<Environment>( globalRecord, nullptr); // 2nd guy is parent of this Env which is null
+        // learning: 
+            // shared_ptr p = std::make_shared< className >( constructor_arg1, constructor_arg2 )
+    }
+
     llvm::GlobalVariable* createGlobalVariable( const std::string& varName, 
                                                 llvm::Constant* init_value) {
         // using the module setOrInsert
@@ -295,13 +350,14 @@ private:
 
     /* Checks if function is already present asdking the builder, if not creates the fn-prototype */
     llvm::Function* createFunction( const std::string &fnName, 
-                                    llvm::FunctionType* fnType){
+                                    llvm::FunctionType* fnType,
+                                    std::shared_ptr<Environment> env){
         
         /* Checks if fnName is present in the symbol table */
         fn = module->getFunction(fnName); // returns fn-pointer is presnet else nullptr
         
         if(fn == nullptr){
-            fn = createFunctionProto(fnName, fnType);
+            fn = createFunctionProto(fnName, fnType, env);
         }
 
         /* create the entry and other basicBlock */
@@ -311,7 +367,8 @@ private:
     }
 
     llvm::Function* createFunctionProto( const std::string& fnName,
-                                        llvm::FunctionType* fnType ){
+                                        llvm::FunctionType* fnType,
+                                        std::shared_ptr<Environment> env ){
     
         /* 1. create and show it to the outside world by ExternalLinkage */
         fn = llvm::Function::Create( 
@@ -321,6 +378,7 @@ private:
                                     *module /* Module& */
          );
 
+        env->define(fnName, fn);
         // This is inside Verifier.h
         verifyFunction(*fn); // requires llvm/IR/Verifier.h
 

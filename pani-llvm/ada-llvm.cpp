@@ -18,16 +18,29 @@ int main(){
         * 
         * Finally, outside this local scope print the global VERSION  
         */
+
+
+    // Below will fail becoz, of multiple top-level S-expression
+    // Soln: Make single top-level s-expression 
+    // std::string program = R"(
+
+    //     (var VERSION 42)
+
+    //     (begin 
+    //         (var VERSION 42)
+    //         (printf "Version: %d\n\n" VERSION)
+    //     )
+
+    //     (printf "Version: %d\n\n" VERSION)
+    // )";
+
+
     std::string program = R"(
 
-        (var VERSION 42)
-
-        (begin 
-            (var VERSION 42)
-            (printf "Version: %d\n\n" VERSION)
-        )
-
+    (begin
         (printf "Version: %d\n\n" VERSION)
+    )
+
     )";
 
     // init the compiler
