@@ -264,4 +264,8 @@ public:
 Final Result at the end 
 ![](../images/Env_final.png)
 > - [!NOTE]
-> - 
+> - Although, we can see the local variables are recognised
+> - `%VERSION = load i32, i32* @VERSION`
+>   - What this means is:-  The value at address of `global-VERSION` is used OR read from global and assign to local
+>   - Hence, this `begin` still doesn't create a scope
+>   - We will solve the issue, next.

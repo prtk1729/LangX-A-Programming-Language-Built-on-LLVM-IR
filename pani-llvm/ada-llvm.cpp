@@ -22,17 +22,16 @@ int main(){
 
     // Below will fail becoz, of multiple top-level S-expression
     // Soln: Make single top-level s-expression 
+    // if <cond> <then>
     std::string program = R"(
         (begin
-            (var x 12)
-
-            (begin 
-                (var x 42)
-                (printf "Version: %d    " x)
+            (var x 10)
+            (while (> x 0)
+                (begin
+                    (printf "%d " x)
+                    (set x (- x 1))
+                )
             )
-
-            (set x 100)
-            (printf "Version: %d    " x)
         )
     )";
 

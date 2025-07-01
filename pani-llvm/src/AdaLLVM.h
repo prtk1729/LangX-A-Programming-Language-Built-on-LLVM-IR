@@ -16,6 +16,19 @@
 
 using syntax::AdaParser; // class AdaParser is encapsulated inside synatx namespace in Adaparser.h
 
+// Generic Operation
+/* ast and env will be found where this gets unpacked as it is by preprocessor
+* do while creates a scope, cool cpp trick
+* (+ x 21) -> (x + 21): opd1 is Exp(x), opd2: Exp(21) -> SInce, Exp() -> We pass through gen
+*/
+// / Generic binary operator
+// Trap: preprocessor -> can't put xomments within
+#define GENERIC_BINARY_OPERATION(Op, varName) \
+    do{ \
+        auto opd1 = gen(ast.list[1], env);  \
+        auto opd2 = gen(ast.list[2], env);  \
+        return builder->Op(opd1, opd2, varName); \
+    }while(false)  
 
 class AdaLLVM {
 public:
@@ -252,26 +265,199 @@ private:
                     // get the string i.e fnName or "var"
                     auto op = tag.string;
 
-                    // if( op == "var" ){
-                    //     /**
-                    //      * Variables
-                    //      * 1. Local (TODO)
-                    //      * 2. Global
-                    //      *      - R" ( (var VERSION 42) ) " 
-                    //      *      - var: tag
-                    //      *      - VERSION: name of global var i.e varName
-                    //      *      - 42:  init_value
-                    //      */
-                    //     std::string varName = ast.list[1].string; // Trap: ast.list[1] will have Exp("VERSION"), we need to get the string
-                    //     // Initialiser
-                    //     llvm::Value* init_value = gen(ast.list[2], env); // ast.list[2] has Exp(42), which is expected for gen
-                    //     // sets properties and of this global variable, just like createFunction
-                    //     llvm::GlobalVariable* g = createGlobalVariable(varName, 
-                    //                                                     (llvm::Constant*)init_value);
-                    //     return g->getInitializer();
+                    /* =========== BINARY OPERATORS ==================== */
+                    if( op == "+" ){
+                        // creates the IR: add, y the builder and returns the Value*
+                        GENERIC_BINARY_OPERATION(CreateAdd, "tempadd");
+                    }
+                    else if( op == "-" ){
+                        GENERIC_BINARY_OPERATION(CreateSub, "tempsub");
+                    }
+                    else if( op == "*" ){
+                        GENERIC_BINARY_OPERATION(CreateMul, "tempmul");
+                    }
+                    else if( op == "/" ){ 
+                        GENERIC_BINARY_OPERATION(CreateSDiv, "tempdiv");
+                    }
+
+                    // cmp operators
+                    else if(op == "=="){
+                        GENERIC_BINARY_OPERATION(CreateICmpEQ, "tempcmp");
+                    }
+                    else if(op == ">="){
+                        GENERIC_BINARY_OPERATION(CreateICmpUGE, "tempcmp");
+                    }
+                    else if(op == "<="){
+                        GENERIC_BINARY_OPERATION(CreateICmpULE, "tempcmp");
+                    }
+                    else if(op == ">"){
+                        GENERIC_BINARY_OPERATION(CreateICmpUGT, "tempcmp");
+                    }
+                    else if(op == "<"){
+                        GENERIC_BINARY_OPERATION(CreateICmpULT, "tempcmp");
+                    }
+                    else if(op == "!="){
+                        GENERIC_BINARY_OPERATION(CreateICmpNE, "tempcmp");
+                    }
+                    /* =========== BINARY OPERATORS ==================== */
+
+
+                    /*========== Control Flow =========================== */
+                    else if( op == "if" ){
+                        /* Idea
+
+                            - R string
+                                (begin
+                                        (var x 40)
+                                        (if (>= x 40)
+                                            1
+                                            3
+                                        )
+                                        (printf "%d " x)
+                                    )
+                            - <if> <cond> <then> <else>
+                            - Compile the condition and generate IR for that
+                            - We need to create the basicBlocks
+                                - ifBlock, elseBlock, ifEndBlock 
+                        */
+
+                        // Compile the <cond>: (>= x 40)
+                        // The following compilation emits:- if (>= x 40)
+                            // %cond = icmp i1 sge i32 40
+                        auto cond = gen(ast.list[1], env);
+
+                        // create blocks
+                        // creates label "then", "else", 
+                        auto thenBlock = createBB("then", fn);
+                        auto elseBlock = createBB("else"); // Let's not attach right-away to parent
+                        auto ifEndBlock = createBB("ifend"); // Wont attach to parent. As we wont be emitting code here, right-away
+                        
+                        // Conditional Branch
+                        // create cond-branching instruction i.e control-flow split inst
+                        // split control-flow: if <cond> <then> <else> : This control flow is created
+                        // br i1 %cond, label thenBlock, label elseBlock    -> This is emitted
+                        builder->CreateCondBr(cond, thenBlock, elseBlock); 
+
+                        // Then branch
+                        // Bring pen(Builder) to location where we want to emit
+                        builder->SetInsertPoint(thenBlock); // here, I want to wmit IR
+                        // resolve and compile the IR, of then i.e thenRes
+                        // (if <cond> <then>) -> list[2]
+                        // emits IR: then here is return 1 and goto ifEndBlock
+                        // br 
+                        auto thenRes = gen(ast.list[2], env); // compile: <then>
+                        // uncond goto ifend with the ret value
+                        // br label %ifend
+                        builder->CreateBr(ifEndBlock);
+                        // restore then-block for phi instruction
+                        thenBlock = builder->GetInsertBlock();
+
+                        // Else Branch
+                        // We need to now, attach it to the basic block list of fn
+                            // Why? Needed for phi-node to recognise this and also to restore elseBlock
+                        fn->getBasicBlockList().push_back(elseBlock); // attaches elseBlock to parent's func-ptr
+                        // Bring IRBuilder to the state: <ElseBlock, IR-instr>
+                        builder->SetInsertPoint(elseBlock);
+                        // Compile: <else> -> ( if <cond> <then> <else> )
+                        auto elseRes = gen(ast.list[3], env);
+                        // create uncond br to ifend
+                        builder->CreateBr(ifEndBlock);
+                        // restore for phi instruction, 
+                        // after we have added the IR within a block, there might be a chance we have changed the address
+                        elseBlock = builder->GetInsertBlock();
+
+                        // ifEnd Branch: Where we merge the control-flow
+                        // attach to parent
+                        fn->getBasicBlockList().push_back(ifEndBlock);
+                        // Needs to know based on from it came from, which value to return
+                        // Needs phi instruction for control-flow merge instr
+                        builder->SetInsertPoint(ifEndBlock);
+                        // create PHI node
+                        auto phi = builder->CreatePHI( builder->getInt32Ty(), /* llvm::Type* */ 
+                                            2, 
+                                            "tmpif"
+                                          );
+                        // merge them, we need to have the thenBlock and elseBlock
+                        // pushed to BasicBlocksList() prior to adding the incoming of phi node
+                            // This we have already donw, when sending the parent-fn createBB()
+                        phi->addIncoming(thenRes, thenBlock); // llvm::Value*, llvm::BasicBlock*
+                        phi->addIncoming(elseRes, elseBlock); // llvm::Value*, llvm::BasicBlock*
+                        
+                        // Above 3 will create:
+                            // ifend:
+                               // phi i32 [1, %thenBlock], [3, %elseBlock]
+                        return phi;
+                    }
+
+                    // else if( op == "while"){
+
                     // }
 
-                    if( op == "var" ){
+
+                    /* (while <cond> <body> ) */
+                    else if( op == "while" ){
+                        // Here we are in label entry: i.e We are in entry-block
+                        // From entryBlock, w/o any cond we move to condBlock
+
+                        // entry to condBlock, as we want to emit/compile <cond> inside condBlock
+                        /* 
+                        * entry:
+                        * br label %condBlock
+                        */
+                        auto condBlock = createBB("cond", fn);
+                        builder->CreateBr(condBlock); // br label %condBlock
+
+                        // =========== condBlock ====================
+                        // Inside condBlock, we compile <cond>
+                        // <cond> here: (> x 0)
+                        // Based on this we goto bodyBlock or loopEndBlock
+                        // Since, we need to emit this conditional Branch IR, we need to create these 2 blocks
+                        // cond -> T -> body
+                        // cond -> F -> loopend ; We need to creat this condbranch
+                        auto bodyBlock = createBB("body");
+                        auto loopEndBlock = createBB("loopend");
+
+                        // compile <cond> : (> x 0) 
+                        // still in entryBlock -> SetInsertPoint to condBlock
+                        builder->SetInsertPoint(condBlock); // Trap
+                        // %cmp = icmp i1 ugt i32 %x, 0
+                        auto condRes = gen(ast.list[1], env);
+
+                        // conditional br
+                        // br i1 %cmp, label %body, label %loopend
+                        builder->CreateCondBr(condRes, bodyBlock, loopEndBlock);
+                        // =========== condBlock ====================
+
+
+
+                        // =========== bodyBlock ====================
+                        // register the parent in parent-fn's BasicBlockList
+                        fn->getBasicBlockList().push_back(bodyBlock); 
+                        // Currently inside condBlock => IRBuilder is a state-m/c
+                        builder->SetInsertPoint(bodyBlock); 
+                        // compile <body>
+                        auto bodyRes = gen(ast.list[2], env); // printf and x -= 1 etc
+                        // This is how we createt the looping structure
+                            // already codBlock -> bodyBlock in CreateCondBr()
+                        // Here, since body was successfully executed, we loopBack to condBlock
+                            // Inside condBlock, we can run the cond-branch instr
+                        builder->CreateBr(condBlock); // br label %cond from bodyBlock
+                        // =========== bodyBlock ====================
+                        
+                        // =========== loopEndBlock ====================
+                        // register the parent in parent-fn's BasicBlockList
+                        fn->getBasicBlockList().push_back(loopEndBlock); 
+                        // Currently inside bodyBlock => IRBuilder is a state-m/c
+                        builder->SetInsertPoint(loopEndBlock); 
+                        // We dont loop back, rather the next sequence of IR
+                        // =========== loopEndBlock ====================
+
+                        return builder->getInt32(0);
+                    }
+                    /*========== Control Flow =========================== */
+
+
+                    else if( op == "var" ){
                         /**
                          * var declarartion in s-expression
                          * - (var x 42) 
@@ -286,6 +472,7 @@ private:
                          *          - Hence, one way to distinguih is asking if it is AllocInst type?
                          */
 
+                         // Trap: ast.list[1] will have Exp("VERSION"), we need to get the string
                         auto varNameDecl = ast.list[1]; // (var x 42) or (var (x number) 42) -> x or (x number)
                         auto varName = extractVarName(varNameDecl); // varName = x
 
@@ -305,7 +492,7 @@ private:
                         llvm::Value* varBinding = allocVars(varName, varType, env); // binds
 
                         // Set value
-                        auto init_value = gen(ast.list[2], env);
+                        auto init_value = gen(ast.list[2], env); // ast.list[2] has Exp(42), which is expected for gen
 
                         /* store ir syntax:  store <type> <value>, <type> * <ptrName> */
                         // emits IR: store i32 42, i32* %x; Here %x is varBinding of alloca which is ptr
@@ -326,6 +513,8 @@ private:
                         // emits IR instruction
                         // store i32 100, i32* %x, align 4
                         builder->CreateStore(value, varBinding);
+
+                        return value; // expects llvm::Value*
                     }
 
                     else if(op == "begin"){
@@ -555,3 +744,13 @@ private:
 
 /* End of guard for AdaLLVM header */
 #endif
+
+
+
+
+
+
+
+
+
+
